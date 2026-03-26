@@ -1,0 +1,18 @@
+﻿src/pages/DashboardPage.tsx(3,10): error TS6133: 'FileText' is declared but its value is never read.
+src/pages/DashboardPage.tsx(3,121): error TS6133: 'PanelLeftClose' is declared but its value is never read.
+src/pages/DashboardPage.tsx(8,27): error TS2307: Cannot find module '../types/chat' or its corresponding type declarations.
+src/pages/FileDetailPage.tsx(2,47): error TS6133: 'Search' is declared but its value is never read.
+src/pages/FileDetailPage.tsx(5,10): error TS2305: Module '"../services/knowledgeService"' has no exported member 'getFileInsights'.
+src/pages/FileDetailPage.tsx(84,9): error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.
+src/pages/FileDetailPage.tsx(99,27): error TS2339: Property 'summary' does not exist on type '{}'.
+src/pages/FileDetailPage.tsx(108,28): error TS2339: Property 'intent' does not exist on type '{}'.
+src/pages/FileDetailPage.tsx(114,28): error TS2339: Property 'related_prs' does not exist on type '{}'.
+src/pages/FileDetailPage.tsx(131,25): error TS2339: Property 'related_prs' does not exist on type '{}'.
+src/pages/FileDetailPage.tsx(148,27): error TS2339: Property 'related_prs' does not exist on type '{}'.
+src/pages/FileDetailPage.tsx(148,47): error TS2339: Property 'related_prs' does not exist on type '{}'.
+src/pages/GitHubConnectPage.tsx(9,9): error TS6133: 'getToken' is declared but its value is never read.
+src/pages/KnowledgeTimelinePage.tsx(2,17): error TS6133: 'ArrowLeft' is declared but its value is never read.
+src/pages/RepositorySelectionPage.tsx(2,10): error TS6133: 'Link' is declared but its value is never read.
+src/pages/SettingsPage.tsx(2,57): error TS6133: 'Terminal' is declared but its value is never read.
+src/pages/SettingsPage.tsx(12,17): error TS6133: 'error' is declared but its value is never read.
+src/pages/SettingsPage.tsx(12,24): error TS6133: 'loading' is declared but its value is never read.

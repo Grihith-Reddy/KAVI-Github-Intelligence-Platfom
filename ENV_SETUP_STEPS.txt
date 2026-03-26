@@ -1,0 +1,108 @@
+KAVI ENV Setup (Firebase + GitHub)
+==================================
+
+Goal
+----
+Configure these variables:
+- Frontend: `VITE_FIREBASE_*` + `VITE_API_BASE_URL`
+- Backend: `FIREBASE_*`, GitHub OAuth vars, DB, and AI vars
+
+
+Step 1: Create Firebase Web App
+-------------------------------
+1. Open Firebase Console -> your project -> Project settings.
+2. In "Your apps", create (or use) a Web app.
+3. Copy values for frontend `.env`:
+   - `apiKey` -> `VITE_FIREBASE_API_KEY`
+   - `authDomain` -> `VITE_FIREBASE_AUTH_DOMAIN`
+   - `projectId` -> `VITE_FIREBASE_PROJECT_ID`
+   - `appId` -> `VITE_FIREBASE_APP_ID`
+   - `messagingSenderId` -> `VITE_FIREBASE_MESSAGING_SENDER_ID`
+4. In Firebase Console -> Authentication -> Sign-in method:
+   - Enable `Google`
+   - Enable `Email/Password` (if you want email login/signup on LoginPage)
+
+
+Step 2: Create Firebase Service Account (Backend)
+-------------------------------------------------
+1. Firebase Console -> Project settings -> Service accounts.
+2. Generate a new private key JSON.
+3. Save it locally (example): `backend/secrets/firebase-service-account.json`.
+4. Set backend env:
+   - `FIREBASE_PROJECT_ID=<your_project_id>`
+   - `FIREBASE_CREDENTIALS_PATH=./secrets/firebase-service-account.json`
+
+Alternative:
+- Use `FIREBASE_CREDENTIALS_JSON` with the full JSON as a single-line string.
+- Or set `GOOGLE_APPLICATION_CREDENTIALS` externally.
+
+
+Step 3: Create GitHub OAuth App
+-------------------------------
+1. GitHub -> Settings -> Developer settings -> OAuth Apps -> New OAuth App
+2. Use:
+   - Homepage URL: `http://localhost:5173`
+   - Authorization callback URL: `http://localhost:8000/api/github/callback`
+3. Copy:
+   - `GITHUB_CLIENT_ID`
+   - `GITHUB_CLIENT_SECRET`
+
+
+Step 4: Generate Secrets
+------------------------
+Generate state secret:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+Generate Fernet key:
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+
+Step 5: Backend .env Example
+----------------------------
+ENV=development
+DATABASE_URL=postgresql+psycopg2://postgres:kavi@localhost:5432/kavi
+FRONTEND_URL=http://localhost:5173
+
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CREDENTIALS_PATH=./secrets/firebase-service-account.json
+# FIREBASE_CREDENTIALS_JSON={"type":"service_account",...}
+
+GITHUB_CLIENT_ID=your_real_github_client_id
+GITHUB_CLIENT_SECRET=your_real_github_client_secret
+GITHUB_OAUTH_REDIRECT_URI=http://localhost:8000/api/github/callback
+GITHUB_STATE_SECRET=your_generated_random_secret
+
+TOKEN_ENCRYPTION_KEY=your_generated_fernet_key
+
+AI_PROVIDER=gemini
+AI_MODEL=gemini-2.5-flash
+AI_API_KEY=your_real_gemini_key
+
+
+Step 6: Frontend .env Example
+-----------------------------
+VITE_API_BASE_URL=http://localhost:8000/api
+VITE_FIREBASE_API_KEY=your_firebase_web_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your-project-id.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-project-id
+VITE_FIREBASE_APP_ID=your_firebase_app_id
+VITE_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
+
+
+Step 7: Local Run Order
+-----------------------
+1. Start backend:
+   - `cd backend`
+   - `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000`
+2. Start frontend:
+   - `cd frontend`
+   - `npm run dev`
+3. Open `http://localhost:5173`
+4. Login from `/login`, then connect GitHub.
+
+
+Troubleshooting
+---------------
+- 401 "Missing bearer token": you are calling protected API without Firebase ID token.
+- 503 "Firebase authentication is not configured": backend Firebase service account vars are missing/invalid.
+- Login popup blocked: allow popups for localhost in browser settings.

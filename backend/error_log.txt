@@ -1,0 +1,28 @@
+(psycopg2.errors.DatatypeMismatch) column "tags" is of type text[] but expression is of type jsonb
+LINE 7: ...ack used."]' AS jsonb), CAST('[]' AS jsonb), CAST('["needs-r...
+                                                             ^
+HINT:  You will need to rewrite or cast the expression.
+
+[SQL: 
+        INSERT INTO knowledge_entries (
+            id, repo_id, pr_id, summary, intent, decisions, risks, tags,
+            ai_model, source_data_hash
+        )
+        VALUES (
+            gen_random_uuid(), %(repo_id)s, %(pr_id)s, %(summary)s, %(intent)s, CAST(%(decisions)s AS jsonb), CAST(%(risks)s AS jsonb), CAST(%(tags)s AS jsonb),
+            %(ai_model)s, %(source_data_hash)s
+        )
+        ON CONFLICT (pr_id)
+        DO UPDATE SET
+            summary = EXCLUDED.summary,
+            intent = EXCLUDED.intent,
+            decisions = EXCLUDED.decisions,
+            risks = EXCLUDED.risks,
+            tags = EXCLUDED.tags,
+            ai_model = EXCLUDED.ai_model,
+            source_data_hash = EXCLUDED.source_data_hash,
+            updated_at = NOW()
+        RETURNING id;
+        ]
+[parameters: {'repo_id': 'b105ba7c-554c-4777-8fdb-9784a089bdab', 'pr_id': '64fba21e-ddd4-43a2-abf4-c7015a848002', 'summary': 'No PR description provided.', 'intent': 'master-abhishek', 'decisions': '["AI summary unavailable - fallback used."]', 'risks': '[]', 'tags': '["needs-review"]', 'ai_model': 'gemini-1.5-flash', 'source_data_hash': 'b54655734f8654e498247d9dfe50680b6d1fa8ed1486ce198660e41a862b7cdd'}]
+(Background on this error at: https://sqlalche.me/e/20/f405)

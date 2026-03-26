@@ -1,0 +1,14 @@
+﻿fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+pydantic-settings>=2.2
+firebase-admin>=6.5
+python-jose[cryptography]>=3.3
+requests>=2.31
+tenacity>=8.2
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+cryptography>=42.0
+python-multipart>=0.0.9
+orjson>=3.9
+alembic>=1.13
