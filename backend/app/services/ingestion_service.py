@@ -21,6 +21,7 @@ MAX_SUMMARY_FILE_CONTEXT = 120
 MAX_SUMMARY_PATCH_CHARS = 800
 MAX_SUMMARY_TEXT_ITEMS = 200
 MAX_SUMMARY_TEXT_CHARS = 1000
+_TAGS_STORAGE_MODE: str | None = None
 
 
 def _hash_payload(payload: dict[str, Any]) -> str:
@@ -257,44 +258,103 @@ def _upsert_knowledge_entry(
     summary: dict[str, Any],
     source_hash: str,
 ) -> str:
-    stmt = text(
-        """
-        INSERT INTO knowledge_entries (
-            id, repo_id, pr_id, summary, intent, decisions, risks, tags,
-            ai_model, source_data_hash
-        )
-        VALUES (
-            gen_random_uuid(), :repo_id, :pr_id, :summary, :intent, CAST(:decisions AS jsonb), CAST(:risks AS jsonb), CAST(:tags AS text[]),
-            :ai_model, :source_data_hash
-        )
-        ON CONFLICT (pr_id)
-        DO UPDATE SET
-            summary = EXCLUDED.summary,
-            intent = EXCLUDED.intent,
-            decisions = EXCLUDED.decisions,
-            risks = EXCLUDED.risks,
-            tags = EXCLUDED.tags,
-            ai_model = EXCLUDED.ai_model,
-            source_data_hash = EXCLUDED.source_data_hash,
-            updated_at = NOW()
-        RETURNING id;
-        """
-    )
-    result = db.execute(
-        stmt,
-        {
-            "repo_id": str(repo_id),
-            "pr_id": str(pr_id),
-            "summary": summary.get("summary"),
-            "intent": summary.get("intent"),
-            "decisions": json.dumps(summary.get("decisions") or []),
-            "risks": json.dumps(summary.get("risks") or []),
-            "tags": [str(tag).strip() for tag in (summary.get("tags") or []) if str(tag).strip()],
-            "ai_model": settings.AI_MODEL,
-            "source_data_hash": source_hash,
-        },
-    ).fetchone()
-    return str(result[0])
+    global _TAGS_STORAGE_MODE
+
+    def _detect_tags_storage_mode() -> str:
+        global _TAGS_STORAGE_MODE
+        if _TAGS_STORAGE_MODE in {"jsonb", "array"}:
+            return _TAGS_STORAGE_MODE
+
+        row = db.execute(
+            text(
+                """
+                SELECT udt_name
+                FROM information_schema.columns
+                WHERE table_name = 'knowledge_entries'
+                  AND column_name = 'tags'
+                """
+            )
+        ).mappings().first()
+        _TAGS_STORAGE_MODE = "jsonb" if str((row or {}).get("udt_name") or "").lower() == "jsonb" else "array"
+        return _TAGS_STORAGE_MODE
+
+    tags = [str(tag).strip() for tag in (summary.get("tags") or []) if str(tag).strip()]
+    base_params = {
+        "repo_id": str(repo_id),
+        "pr_id": str(pr_id),
+        "summary": summary.get("summary"),
+        "intent": summary.get("intent"),
+        "decisions": json.dumps(summary.get("decisions") or []),
+        "risks": json.dumps(summary.get("risks") or []),
+        "ai_model": settings.AI_MODEL,
+        "source_data_hash": source_hash,
+    }
+
+    preferred_mode = _detect_tags_storage_mode()
+    modes_to_try = [preferred_mode, "jsonb" if preferred_mode == "array" else "array"]
+    last_error: Exception | None = None
+
+    for mode in modes_to_try:
+        if mode == "jsonb":
+            stmt = text(
+                """
+                INSERT INTO knowledge_entries (
+                    id, repo_id, pr_id, summary, intent, decisions, risks, tags,
+                    ai_model, source_data_hash
+                )
+                VALUES (
+                    gen_random_uuid(), :repo_id, :pr_id, :summary, :intent, CAST(:decisions AS jsonb), CAST(:risks AS jsonb), CAST(:tags AS jsonb),
+                    :ai_model, :source_data_hash
+                )
+                ON CONFLICT (pr_id)
+                DO UPDATE SET
+                    summary = EXCLUDED.summary,
+                    intent = EXCLUDED.intent,
+                    decisions = EXCLUDED.decisions,
+                    risks = EXCLUDED.risks,
+                    tags = EXCLUDED.tags,
+                    ai_model = EXCLUDED.ai_model,
+                    source_data_hash = EXCLUDED.source_data_hash,
+                    updated_at = NOW()
+                RETURNING id;
+                """
+            )
+            params = {**base_params, "tags": json.dumps(tags)}
+        else:
+            stmt = text(
+                """
+                INSERT INTO knowledge_entries (
+                    id, repo_id, pr_id, summary, intent, decisions, risks, tags,
+                    ai_model, source_data_hash
+                )
+                VALUES (
+                    gen_random_uuid(), :repo_id, :pr_id, :summary, :intent, CAST(:decisions AS jsonb), CAST(:risks AS jsonb), CAST(:tags AS text[]),
+                    :ai_model, :source_data_hash
+                )
+                ON CONFLICT (pr_id)
+                DO UPDATE SET
+                    summary = EXCLUDED.summary,
+                    intent = EXCLUDED.intent,
+                    decisions = EXCLUDED.decisions,
+                    risks = EXCLUDED.risks,
+                    tags = EXCLUDED.tags,
+                    ai_model = EXCLUDED.ai_model,
+                    source_data_hash = EXCLUDED.source_data_hash,
+                    updated_at = NOW()
+                RETURNING id;
+                """
+            )
+            params = {**base_params, "tags": tags}
+
+        try:
+            result = db.execute(stmt, params).fetchone()
+            _TAGS_STORAGE_MODE = mode
+            return str(result[0])
+        except Exception as exc:
+            db.rollback()
+            last_error = exc
+
+    raise RuntimeError(f"Unable to upsert knowledge entry with either tags storage mode: {last_error}")
 
 
 def _upsert_file_mappings(
@@ -346,11 +406,15 @@ def sync_repository(
     db.commit()
 
     prs = github.list_pull_requests(repo_full_name, state="all")
-    results = {"repo_id": repo_id, "synced_prs": 0, "errors": []}
+    results = {"repo_id": repo_id, "synced_prs": 0, "total_prs_fetched": len(prs), "errors": []}
 
     for pr in prs:
+        pr_number = pr.get("number")
+        if not isinstance(pr_number, int):
+            results["errors"].append({"pr": pr_number, "error": "invalid_pr_number"})
+            continue
+
         try:
-            pr_number = pr.get("number")
             pr_detail = github.get_pull_request(repo_full_name, pr_number)
             commits = github.list_pull_request_commits(repo_full_name, pr_number)
             comments = github.list_pull_request_comments(repo_full_name, pr_number)
@@ -362,35 +426,43 @@ def sync_repository(
 
             pr_id = _upsert_pr(db, repo_id, pr_detail)
             _upsert_commits(db, repo_id, pr_id, commits)
-            existing = db.execute(
-                text(
-                    """
-                    SELECT id, source_data_hash
-                    FROM knowledge_entries
-                    WHERE pr_id = :pr_id
-                    """
-                ),
-                {"pr_id": pr_id},
-            ).mappings().first()
-
-            if existing and existing.get("source_data_hash") == source_hash:
-                knowledge_entry_id = str(existing["id"])
-            else:
-                summary = ai_service.summarize_pr(payload)
-                knowledge_entry_id = _upsert_knowledge_entry(db, repo_id, pr_id, summary, source_hash)
-
-            _upsert_file_mappings(db, repo_id, knowledge_entry_id, files)
-
             db.commit()
             results["synced_prs"] += 1
+
+            # Keep core ingestion durable. Knowledge enrichment failures should not
+            # zero-out PR ingestion for the repository.
+            try:
+                existing = db.execute(
+                    text(
+                        """
+                        SELECT id, source_data_hash
+                        FROM knowledge_entries
+                        WHERE pr_id = :pr_id
+                        """
+                    ),
+                    {"pr_id": pr_id},
+                ).mappings().first()
+
+                if existing and existing.get("source_data_hash") == source_hash:
+                    knowledge_entry_id = str(existing["id"])
+                else:
+                    summary = ai_service.summarize_pr(payload)
+                    knowledge_entry_id = _upsert_knowledge_entry(db, repo_id, pr_id, summary, source_hash)
+
+                _upsert_file_mappings(db, repo_id, knowledge_entry_id, files)
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning("Failed to enrich PR %s: %s", pr_number, exc)
+                results["errors"].append({"pr": pr_number, "error": f"enrichment_failed: {str(exc)}"})
         except HTTPException as exc:
             db.rollback()
-            logger.warning("Failed to ingest PR %s: %s", pr.get("number"), exc.detail)
-            results["errors"].append({"pr": pr.get("number"), "error": exc.detail})
+            logger.warning("Failed to ingest PR %s: %s", pr_number, exc.detail)
+            results["errors"].append({"pr": pr_number, "error": exc.detail})
         except Exception as exc:
             db.rollback()
             logger.exception("Unexpected ingestion error")
-            results["errors"].append({"pr": pr.get("number"), "error": str(exc)})
+            results["errors"].append({"pr": pr_number, "error": str(exc)})
 
     db.execute(
         text(

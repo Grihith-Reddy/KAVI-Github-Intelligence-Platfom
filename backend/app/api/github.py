@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from urllib.parse import urlencode
 
 from app.core.access import require_github_account
 from app.core.audit import audit_log
@@ -62,13 +63,16 @@ def github_connect_url(
     user_id = _upsert_user_id(db, current_user)
     state = create_oauth_state(current_user.sub)
     scopes = "read:user,repo,read:org"
-    url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={settings.GITHUB_CLIENT_ID}"
-        f"&redirect_uri={settings.GITHUB_OAUTH_REDIRECT_URI}"
-        f"&scope={scopes}"
-        f"&state={state}"
-    )
+    params = {
+        "client_id": settings.GITHUB_CLIENT_ID,
+        "redirect_uri": settings.GITHUB_OAUTH_REDIRECT_URI,
+        "scope": scopes,
+        "state": state,
+        # Always surface account selection to avoid sticky browser sessions
+        # reconnecting to the previously active GitHub identity.
+        "prompt": "select_account",
+    }
+    url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     audit_log("github.connect_url.created", user_id=user_id, auth0_sub=current_user.sub)
     return {"url": url, "state": state}
 

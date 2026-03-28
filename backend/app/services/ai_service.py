@@ -619,6 +619,7 @@ class AIService:
             "5) For high-level questions, explain outcomes in plain language and avoid dumping raw file paths.\n"
             "6) For general questions, keep code_references empty and avoid repository-specific claims.\n"
             "7) If data is missing, limitations must explicitly call it out.\n\n"
+            "8) When file_excerpt is present for a source, use it for code-level reasoning about that file.\n\n"
             f"QUESTION:\n{query.strip()}\n\n"
             f"PR_CONTEXT:\n{json.dumps(compact_sources, default=str)}\n\n"
             f"REPO_OVERVIEW_CONTEXT:\n{json.dumps(repo_overview_context or {}, default=str)}"
@@ -1055,6 +1056,8 @@ class AIService:
     def _compact_sources(self, context_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         compact: list[dict[str, Any]] = []
         for source in context_sources[:12]:
+            entry_id = str(source.get("entry_id") or "")
+            is_live_file_source = entry_id.startswith("live-file::")
             files = source.get("files") if isinstance(source.get("files"), list) else []
             compact_files = []
             file_paths: list[str] = []
@@ -1073,13 +1076,20 @@ class AIService:
                     }
                 )
 
+            summary_limit = 2200 if is_live_file_source else 720
+            intent_limit = 700 if is_live_file_source else 420
+            file_excerpt = str(source.get("file_excerpt") or "")
+            if is_live_file_source and not file_excerpt:
+                file_excerpt = str(source.get("summary") or "")
+
             compact.append(
                 {
-                    "entry_id": str(source.get("entry_id") or ""),
+                    "entry_id": entry_id,
                     "pr_number": source.get("pr_number"),
                     "pr_title": str(source.get("pr_title") or "")[:240],
-                    "intent": str(source.get("intent") or "")[:420],
-                    "summary": str(source.get("summary") or "")[:720],
+                    "intent": str(source.get("intent") or "")[:intent_limit],
+                    "summary": str(source.get("summary") or "")[:summary_limit],
+                    "file_excerpt": file_excerpt[:3200],
                     "file_count": len(file_paths),
                     "sample_files": file_paths[:8],
                     "files": compact_files,

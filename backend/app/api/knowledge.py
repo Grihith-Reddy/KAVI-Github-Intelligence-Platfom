@@ -33,8 +33,37 @@ def list_entries(
         ),
         {"repo_id": repo_id, "limit": limit, "offset": offset},
     ).mappings().all()
+    used_pr_fallback = False
+    if not rows:
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    pr.id,
+                    COALESCE(
+                        NULLIF(pr.body, ''),
+                        CONCAT('PR #', pr.github_pr_number, ': ', COALESCE(pr.title, 'Untitled pull request'))
+                    ) AS summary,
+                    COALESCE(NULLIF(pr.body, ''), COALESCE(pr.title, 'Untitled pull request')) AS intent,
+                    NULL AS tags,
+                    COALESCE(pr.updated_at, pr.created_at) AS created_at,
+                    pr.github_pr_number,
+                    pr.title AS pr_title,
+                    pr.state AS pr_state
+                FROM pull_requests pr
+                WHERE pr.repo_id = :repo_id
+                ORDER BY COALESCE(pr.merged_at, pr.updated_at, pr.created_at) DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"repo_id": repo_id, "limit": limit, "offset": offset},
+        ).mappings().all()
+        used_pr_fallback = bool(rows)
     audit_log("knowledge.entries.listed", auth0_sub=current_user.sub, repo_id=repo_id, count=len(rows))
-    return {"entries": [dict(row) for row in rows]}
+    return {
+        "entries": [dict(row) for row in rows],
+        "fallback": "pull_requests" if used_pr_fallback else None,
+    }
 
 
 @router.get("/entries/{entry_id}")

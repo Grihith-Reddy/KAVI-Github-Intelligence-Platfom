@@ -4,10 +4,12 @@ import {
   ShieldCheck, LockKeyhole, Zap,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { firebaseAuth } from '../features/auth/firebase'
 import { useAuth } from '../features/auth/useAuth'
 import { useAsync } from '../hooks/useAsync'
 import { useApiClient } from '../services/apiClient'
 import { getGitHubStatus } from '../services/githubService'
+import cloudImg from '../assets/cloud.webp'
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -205,7 +207,7 @@ function FAQItem({ q, a }: { q: string; a: string }) {
 export function LandingPage() {
   const navigate = useNavigate()
   const api = useApiClient()
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, isLoading: authLoading } = useAuth()
   const [scrolled, setScrolled] = useState(false)
   const [isReady, setIsReady] = useState(false)
   const heroCloudRef = useRef<HTMLImageElement>(null)
@@ -280,7 +282,8 @@ export function LandingPage() {
   }, [])
 
   const handleStart = () => {
-    if (!isAuthenticated) {
+    const hasAuthSession = Boolean(firebaseAuth.currentUser) || isAuthenticated
+    if (!hasAuthSession || authLoading) {
       navigate('/login?returnTo=%2Fconnect-github')
       return
     }
@@ -529,7 +532,7 @@ export function LandingPage() {
           <section aria-labelledby="hero-heading" className="k-hero">
             <div className={`k-hero-card ${isReady ? 'expanded' : ''}`}>
               <img
-                src="/src/assets/cloud.webp"
+                src={cloudImg}
                 alt=""
                 className="hero-cloud"
                 ref={heroCloudRef}

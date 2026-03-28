@@ -1,6 +1,8 @@
+import base64
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 import requests
 from fastapi import HTTPException, status
@@ -195,6 +197,44 @@ class GitHubService:
             if len(files) >= max_entries:
                 break
         return files
+
+    def get_file_content(
+        self,
+        full_name: str,
+        file_path: str,
+        ref: str | None = None,
+        max_chars: int = 12000,
+    ) -> str:
+        normalized_path = str(file_path or "").strip().replace("\\", "/")
+        if not normalized_path:
+            return ""
+
+        url = f"{settings.GITHUB_API_BASE}/repos/{full_name}/contents/{quote(normalized_path, safe='/')}"
+        params: dict[str, Any] = {}
+        if ref:
+            params["ref"] = ref
+
+        payload = self._request("GET", url, params=params, allow_wait=True)
+        if not isinstance(payload, dict):
+            return ""
+        if str(payload.get("type") or "").lower() != "file":
+            return ""
+
+        content = payload.get("content")
+        encoding = str(payload.get("encoding") or "").lower()
+        if not isinstance(content, str) or not content:
+            return ""
+
+        text_content = content
+        if encoding == "base64":
+            try:
+                decoded = base64.b64decode(content, validate=False)
+                text_content = decoded.decode("utf-8", errors="replace")
+            except Exception:
+                logger.warning("Unable to decode base64 content for %s in %s", normalized_path, full_name)
+                return ""
+
+        return text_content[: max(1, max_chars)]
 
 
 @retry(

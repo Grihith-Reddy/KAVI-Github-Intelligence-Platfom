@@ -3,8 +3,6 @@ import { motion } from 'framer-motion'
 import { Eye, EyeOff, Mail, Lock, Zap, ArrowRight, AlertCircle } from 'lucide-react'
 import { useNavigate, Link, useLocation } from 'react-router-dom'
 
-// ─── Firebase imports ─────────────────────────────────────────────────────────
-// Adjust these imports to match your Firebase setup
 import {
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -13,8 +11,8 @@ import {
 } from 'firebase/auth'
 import { firebaseAuth, googleProvider } from '../features/auth/firebase'
 import { useAuth } from '../features/auth/useAuth'
+import cloudImg from '../assets/cloud.webp'
 
-// ─── Google icon SVG ──────────────────────────────────────────────────────────
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -68,7 +66,6 @@ export function LoginPage() {
     if (!email.trim() || (!password.trim() && mode !== 'reset')) return
     setLoading(true)
     setError(null)
-
     try {
       if (mode === 'reset') {
         await sendPasswordResetEmail(firebaseAuth, email)
@@ -101,7 +98,7 @@ export function LoginPage() {
   }
 
   const title = mode === 'signin' ? 'Welcome back.' : mode === 'signup' ? 'Create account.' : 'Reset password.'
-  const subtitle = mode === 'signin' ? 'Sign in to your Kavi workspace.' : mode === 'signup' ? 'Start building your team\'s architecture memory.' : 'We\'ll send a reset link to your email.'
+  const subtitle = mode === 'signin' ? 'Sign in to your Kavi workspace.' : mode === 'signup' ? "Start building your team's architecture memory." : "We'll send a reset link to your email."
 
   return (
     <>
@@ -131,6 +128,7 @@ export function LoginPage() {
           display: flex;
           align-items: center;
           justify-content: center;
+          padding: 48px 24px;
         }
 
         .login-cloud {
@@ -144,6 +142,7 @@ export function LoginPage() {
           z-index: 1;
         }
 
+        /* ── Two-column inner card ── */
         .login-inner {
           position: relative;
           z-index: 10;
@@ -151,22 +150,55 @@ export function LoginPage() {
           backdrop-filter: blur(24px);
           -webkit-backdrop-filter: blur(24px);
           border-radius: 28px;
-          padding: 40px 40px 36px;
-          width: 100%;
-          max-width: 440px;
           box-shadow: 0 24px 60px rgba(24,29,31,0.14);
+          width: 100%;
+          max-width: 860px;
+          display: grid;
+          grid-template-columns: 1fr 1px 1fr;
+          overflow: hidden;
         }
 
-        @media (max-width: 520px) {
-          .login-inner { padding: 28px 24px; border-radius: 20px; }
+        /* Left col */
+        .login-left {
+          padding: 44px 40px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        /* Divider line */
+        .login-col-divider {
+          background: #E7E7E9;
+          margin: 32px 0;
+        }
+
+        /* Right col */
+        .login-right {
+          padding: 44px 40px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        /* Collapse to single column on small screens */
+        @media (max-width: 680px) {
+          .login-inner {
+            grid-template-columns: 1fr;
+            max-width: 440px;
+          }
+          .login-col-divider { display: none; }
+          .login-left { padding: 32px 28px 0; }
+          .login-right { padding: 20px 28px 32px; }
+          .login-card { padding: 32px 16px; }
           .login-card { border-radius: 20px; }
         }
 
+        /* Logo */
         .login-logo {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin-bottom: 28px;
+          margin-bottom: 32px;
           text-decoration: none;
         }
         .login-logo-mark {
@@ -186,7 +218,7 @@ export function LoginPage() {
 
         .login-title {
           font-family: 'Archivo', sans-serif;
-          font-size: 28px;
+          font-size: 26px;
           font-weight: 700;
           color: #181D1F;
           letter-spacing: -0.02em;
@@ -196,7 +228,7 @@ export function LoginPage() {
           font-family: 'Archivo', sans-serif;
           font-size: 14px;
           color: #424647;
-          margin-bottom: 28px;
+          margin-bottom: 32px;
           line-height: 1.5;
         }
 
@@ -207,7 +239,7 @@ export function LoginPage() {
           align-items: center;
           justify-content: center;
           gap: 10px;
-          padding: 12px 20px;
+          padding: 13px 20px;
           background: #fff;
           border: 1.5px solid #E7E7E9;
           border-radius: 12px;
@@ -217,24 +249,32 @@ export function LoginPage() {
           color: #181D1F;
           cursor: pointer;
           transition: border-color 0.15s, box-shadow 0.15s;
-          margin-bottom: 20px;
         }
         .login-google:hover { border-color: #181D1F; box-shadow: 0 2px 8px rgba(24,29,31,0.08); }
         .login-google:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        /* Divider */
-        .login-divider {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 20px;
+        /* Left side tagline */
+        .login-tagline {
+          margin-top: 28px;
+          padding-top: 28px;
+          border-top: 1px solid #E7E7E9;
         }
-        .login-divider-line { flex: 1; height: 1px; background: #E7E7E9; }
-        .login-divider-text {
+        .login-tagline-text {
+          font-family: 'Archivo', sans-serif;
+          font-size: 13px;
+          color: rgba(24,29,31,0.45);
+          line-height: 1.6;
+        }
+
+        /* Section label for right col */
+        .login-section-label {
           font-family: 'Gabarito', sans-serif;
           font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
           color: rgba(24,29,31,0.4);
-          white-space: nowrap;
+          margin-bottom: 16px;
         }
 
         /* Fields */
@@ -257,7 +297,7 @@ export function LoginPage() {
           border: 1.5px solid #E7E7E9;
           border-radius: 12px;
           padding: 0 14px;
-          transition: border-color 0.15s;
+          transition: border-color 0.15s, background 0.15s;
         }
         .login-input-wrap:focus-within {
           border-color: #181D1F;
@@ -342,7 +382,7 @@ export function LoginPage() {
 
         /* Footer links */
         .login-footer {
-          margin-top: 20px;
+          margin-top: 18px;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -368,30 +408,27 @@ export function LoginPage() {
 
       <div className="login-page">
         <div className="login-card">
-          {/* Cloud background */}
-          <img src="/src/assets/cloud.webp" alt="" className="login-cloud" />
+          <img src={cloudImg} alt="" className="login-cloud" />
 
           <motion.div
             className="login-inner"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            initial={{ opacity: 0, scale: 0.96, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
           >
-            {/* Logo */}
-            <Link to="/" className="login-logo">
-              <div className="login-logo-mark">
-                <Zap size={16} color="#fff" strokeWidth={2} />
-              </div>
-              <span className="login-logo-name">KAVI</span>
-            </Link>
+            {/* ── Left column: logo + Google ── */}
+            <div className="login-left">
+              <Link to="/" className="login-logo">
+                <div className="login-logo-mark">
+                  <Zap size={16} color="#fff" strokeWidth={2} />
+                </div>
+                <span className="login-logo-name">KAVI</span>
+              </Link>
 
-            {/* Heading */}
-            <h1 className="login-title">{title}</h1>
-            <p className="login-subtitle">{subtitle}</p>
+              <h1 className="login-title">{title}</h1>
+              <p className="login-subtitle">{subtitle}</p>
 
-            {/* Google — only show on signin / signup */}
-            {mode !== 'reset' && (
-              <>
+              {mode !== 'reset' && (
                 <button
                   onClick={handleGoogle}
                   disabled={googleLoading || loading}
@@ -402,116 +439,126 @@ export function LoginPage() {
                     : <><GoogleIcon /> Continue with Google</>
                   }
                 </button>
+              )}
 
-                <div className="login-divider">
-                  <div className="login-divider-line" />
-                  <span className="login-divider-text">or continue with email</span>
-                  <div className="login-divider-line" />
-                </div>
-              </>
-            )}
-
-            {/* Error */}
-            {error && (
-              <div className="login-error">
-                <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                {error}
+              <div className="login-tagline">
+                <p className="login-tagline-text">
+                  Pull-request intelligence for engineering teams. Query architecture decisions, PR intent, and file evolution.
+                </p>
               </div>
-            )}
+            </div>
 
-            {/* Reset success */}
-            {resetSent && (
-              <div className="login-success">
-                ✓ Reset link sent! Check your inbox for <strong>{email}</strong>.
-              </div>
-            )}
+            {/* ── Vertical divider ── */}
+            <div className="login-col-divider" />
 
-            {/* Form */}
-            {!resetSent && (
-              <form onSubmit={handleEmailAuth} noValidate>
-                {/* Email */}
-                <div className="login-field">
-                  <label className="login-label">Email</label>
-                  <div className="login-input-wrap">
-                    <Mail size={15} className="login-input-icon" />
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => { setEmail(e.target.value); clearError() }}
-                      placeholder="you@company.com"
-                      className="login-input"
-                      autoComplete="email"
-                      required
-                    />
-                  </div>
+            {/* ── Right column: email form ── */}
+            <div className="login-right">
+              {mode !== 'reset' && (
+                <p className="login-section-label">Or sign in with email</p>
+              )}
+
+              {error && (
+                <div className="login-error">
+                  <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                  {error}
                 </div>
+              )}
 
-                {/* Password — hide on reset mode */}
-                {mode !== 'reset' && (
+              {resetSent && (
+                <div className="login-success">
+                  ✓ Reset link sent! Check your inbox for <strong>{email}</strong>.
+                </div>
+              )}
+
+              {!resetSent && (
+                <form onSubmit={handleEmailAuth} noValidate>
                   <div className="login-field">
-                    <label className="login-label">Password</label>
+                    <label className="login-label">Email</label>
                     <div className="login-input-wrap">
-                      <Lock size={15} className="login-input-icon" />
+                      <Mail size={15} className="login-input-icon" />
                       <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={password}
-                        onChange={(e) => { setPassword(e.target.value); clearError() }}
-                        placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
+                        type="email"
+                        value={email}
+                        onChange={(e) => { setEmail(e.target.value); clearError() }}
+                        placeholder="you@company.com"
                         className="login-input"
-                        autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                        autoComplete="email"
                         required
                       />
-                      <button
-                        type="button"
-                        className="login-eye"
-                        onClick={() => setShowPassword(s => !s)}
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                      </button>
                     </div>
                   </div>
-                )}
 
-                {/* Submit */}
-                <button
-                  type="submit"
-                  disabled={loading || googleLoading}
-                  className="login-submit"
-                >
-                  {loading ? 'Please wait…' : mode === 'signin' ? <>Sign in <ArrowRight size={15} /></> : mode === 'signup' ? <>Create account <ArrowRight size={15} /></> : 'Send reset link'}
-                </button>
-              </form>
-            )}
+                  {mode !== 'reset' && (
+                    <div className="login-field">
+                      <label className="login-label">Password</label>
+                      <div className="login-input-wrap">
+                        <Lock size={15} className="login-input-icon" />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={(e) => { setPassword(e.target.value); clearError() }}
+                          placeholder={mode === 'signup' ? 'Min. 6 characters' : '••••••••'}
+                          className="login-input"
+                          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                          required
+                        />
+                        <button
+                          type="button"
+                          className="login-eye"
+                          onClick={() => setShowPassword(s => !s)}
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
-            {/* Footer links */}
-            <div className="login-footer">
-              {mode === 'signin' && (
-                <>
-                  <button className="login-link" onClick={() => { setMode('reset'); clearError() }}>
-                    Forgot your password?
+                  <button
+                    type="submit"
+                    disabled={loading || googleLoading}
+                    className="login-submit"
+                  >
+                    {loading
+                      ? 'Please wait…'
+                      : mode === 'signin'
+                        ? <><span>Sign in</span> <ArrowRight size={15} /></>
+                        : mode === 'signup'
+                          ? <><span>Create account</span> <ArrowRight size={15} /></>
+                          : 'Send reset link'
+                    }
                   </button>
+                </form>
+              )}
+
+              <div className="login-footer">
+                {mode === 'signin' && (
+                  <>
+                    <button className="login-link" onClick={() => { setMode('reset'); clearError() }}>
+                      Forgot your password?
+                    </button>
+                    <span className="login-link">
+                      Don't have an account?{' '}
+                      <button className="login-link login-link-strong" style={{ display: 'inline' }} onClick={() => { setMode('signup'); clearError() }}>
+                        Sign up
+                      </button>
+                    </span>
+                  </>
+                )}
+                {mode === 'signup' && (
                   <span className="login-link">
-                    Don't have an account?{' '}
-                    <button className="login-link login-link-strong" style={{ display: 'inline' }} onClick={() => { setMode('signup'); clearError() }}>
-                      Sign up
+                    Already have an account?{' '}
+                    <button className="login-link login-link-strong" style={{ display: 'inline' }} onClick={() => { setMode('signin'); clearError() }}>
+                      Sign in
                     </button>
                   </span>
-                </>
-              )}
-              {mode === 'signup' && (
-                <span className="login-link">
-                  Already have an account?{' '}
-                  <button className="login-link login-link-strong" style={{ display: 'inline' }} onClick={() => { setMode('signin'); clearError() }}>
-                    Sign in
+                )}
+                {mode === 'reset' && (
+                  <button className="login-link" onClick={() => { setMode('signin'); setResetSent(false); clearError() }}>
+                    ← Back to sign in
                   </button>
-                </span>
-              )}
-              {mode === 'reset' && (
-                <button className="login-link" onClick={() => { setMode('signin'); setResetSent(false); clearError() }}>
-                  ← Back to sign in
-                </button>
-              )}
+                )}
+              </div>
             </div>
           </motion.div>
         </div>

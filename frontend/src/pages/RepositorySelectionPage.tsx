@@ -7,6 +7,7 @@ import { useAsync } from '../hooks/useAsync'
 import { useApiClient } from '../services/apiClient'
 import { RepositorySummary, listRepositories, syncRepository } from '../services/githubService'
 import { getApiErrorMessage } from '../utils/errors'
+import cloudImg from '../assets/cloud.webp'
 
 // ─── Card colour palette (matches landing page pastel cards) ─────────────────
 const CARD_COLORS = ['#EAE4DC', '#D7CEF0', '#FDDBCE', '#DBE5F0', '#E4EED2', '#DCEEEF']
@@ -361,7 +362,7 @@ export function RepositorySelectionPage() {
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
         >
-          <img src="/src/assets/cloud.webp" alt="" className="hero-cloud-bg" />
+          <img src={cloudImg} alt="" className="hero-cloud-bg" />
 
           <div className="repo-hero-text">
             <p className="repo-eyebrow">Repository workspace</p>

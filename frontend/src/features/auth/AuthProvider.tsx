@@ -78,8 +78,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logoutUser = useCallback(async () => {
     clearSessionStorageArtifacts()
-    await signOut(firebaseAuth)
-    navigate('/', { replace: true })
+    // Clear local auth state immediately so route guards react without delay.
+    setUser(null)
+    setIsLoading(false)
+    try {
+      await signOut(firebaseAuth)
+    } finally {
+      navigate('/login', { replace: true })
+    }
   }, [navigate])
 
   const getToken = useCallback(async () => {

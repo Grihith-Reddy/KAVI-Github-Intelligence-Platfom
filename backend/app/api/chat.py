@@ -2,6 +2,7 @@ import logging
 from collections import Counter
 from typing import Any
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -17,6 +18,93 @@ from app.services.github_service import GitHubService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
+
+_QUERY_TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_./\\-]{1,}")
+_QUERY_STOP_WORDS = {
+    "a",
+    "about",
+    "an",
+    "and",
+    "are",
+    "can",
+    "code",
+    "did",
+    "do",
+    "does",
+    "explain",
+    "file",
+    "files",
+    "for",
+    "from",
+    "function",
+    "how",
+    "i",
+    "in",
+    "is",
+    "line",
+    "lines",
+    "me",
+    "method",
+    "module",
+    "of",
+    "or",
+    "please",
+    "project",
+    "repo",
+    "repository",
+    "show",
+    "tell",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "what",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
+_TEXT_FILE_EXTENSIONS = {
+    ".c",
+    ".cc",
+    ".cfg",
+    ".conf",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".csv",
+    ".env",
+    ".go",
+    ".graphql",
+    ".h",
+    ".hpp",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".kt",
+    ".md",
+    ".php",
+    ".properties",
+    ".py",
+    ".rb",
+    ".rs",
+    ".scss",
+    ".sh",
+    ".sql",
+    ".swift",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
 
 
 class ChatQuery(BaseModel):
@@ -46,8 +134,203 @@ def _resolve_mode(query: str, mode: str | None) -> str:
     return "default"
 
 
-def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
-    entries: list[dict] = []
+def _extract_search_terms(query: str, limit: int = 10) -> list[str]:
+    seen: set[str] = set()
+    terms: list[str] = []
+    lowered = str(query or "").lower()
+
+    for raw_token in _QUERY_TOKEN_RE.findall(lowered):
+        token = raw_token.strip("`'\"()[]{}<>,:;!?").replace("\\", "/").strip("/")
+        if not token:
+            continue
+
+        token_parts = [token]
+        token_parts.extend(part for part in re.split(r"[._/-]+", token) if part)
+        if "/" in token:
+            token_parts.append(token.split("/")[-1])
+        if "." in token:
+            token_parts.append(token.split(".")[0])
+
+        for part in token_parts:
+            normalized = str(part).strip().strip("-_")
+            if len(normalized) < 3:
+                continue
+            if normalized in _QUERY_STOP_WORDS:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+
+    return terms
+
+
+def _has_file_path_signal(query: str) -> bool:
+    text_value = str(query or "")
+    if "/" in text_value or "\\" in text_value:
+        return True
+    return bool(re.search(r"\b[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]{1,8}\b", text_value))
+
+
+def _is_text_file_path(file_path: str) -> bool:
+    normalized = str(file_path or "").strip().replace("\\", "/")
+    if not normalized:
+        return False
+
+    filename = normalized.split("/")[-1].lower()
+    if filename in {"dockerfile", "makefile", "jenkinsfile", "procfile"}:
+        return True
+    if "." not in filename:
+        return False
+    extension = "." + filename.split(".")[-1]
+    return extension in _TEXT_FILE_EXTENSIONS
+
+
+def _find_candidate_file_paths(
+    db: Session,
+    repo_id: str,
+    query_terms: list[str],
+    limit: int = 4,
+) -> list[str]:
+    if not query_terms:
+        return []
+
+    predicates: list[str] = []
+    params: dict[str, Any] = {"repo_id": repo_id, "limit": max(12, limit * 4)}
+    for idx, term in enumerate(query_terms[:10]):
+        key = f"path_term_{idx}"
+        predicates.append(f"LOWER(fm.file_path) LIKE :{key}")
+        params[key] = f"%{term.lower()}%"
+
+    if not predicates:
+        return []
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT fm.file_path, COUNT(*) AS reference_count
+            FROM file_mappings fm
+            WHERE fm.repo_id = :repo_id
+              AND ({' OR '.join(predicates)})
+            GROUP BY fm.file_path
+            ORDER BY reference_count DESC
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+
+    scored: list[tuple[int, int, str]] = []
+    lowered_terms = [term.lower() for term in query_terms]
+    for row in rows:
+        file_path = str(row.get("file_path") or "").strip()
+        if not file_path or not _is_text_file_path(file_path):
+            continue
+        lowered_path = file_path.lower()
+        base_name = lowered_path.split("/")[-1]
+        score = 0
+        for term in lowered_terms:
+            if term == lowered_path or term == base_name:
+                score += 16
+            elif base_name.startswith(term) or base_name.endswith(term):
+                score += 10
+            elif term in base_name:
+                score += 8
+            elif term in lowered_path:
+                score += 4
+        score += min(int(row.get("reference_count") or 0), 12)
+        scored.append((score, int(row.get("reference_count") or 0), file_path))
+
+    ranked = sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)
+    return [path for _, _, path in ranked[:limit]]
+
+
+def _merge_sources(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for group in (primary, secondary):
+        for source in group:
+            files = source.get("files") if isinstance(source.get("files"), list) else []
+            primary_path = ""
+            if files and isinstance(files[0], dict):
+                primary_path = str(files[0].get("file_path") or "").strip()
+            key = str(source.get("entry_id") or "").strip() or f"path::{primary_path}"
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(source)
+            if len(merged) >= limit:
+                return merged
+
+    return merged
+
+
+def _build_lexical_term_fragments(terms: list[str]) -> tuple[str, str, dict[str, str]]:
+    if not terms:
+        return "FALSE", "0", {}
+
+    predicates: list[str] = []
+    rank_signals: list[str] = []
+    params: dict[str, str] = {}
+
+    for idx, term in enumerate(terms):
+        key = f"term_{idx}"
+        params[key] = f"%{term}%"
+        predicates.extend(
+            [
+                f"k.summary ILIKE :{key}",
+                f"k.intent ILIKE :{key}",
+                f"coalesce(pr.title, '') ILIKE :{key}",
+                f"coalesce(pr.body, '') ILIKE :{key}",
+                f"coalesce(fm.file_path, '') ILIKE :{key}",
+            ]
+        )
+        rank_signals.append(f"CASE WHEN coalesce(fm.file_path, '') ILIKE :{key} THEN 4 ELSE 0 END")
+        rank_signals.append(
+            "CASE WHEN ("
+            f"k.summary ILIKE :{key} OR "
+            f"k.intent ILIKE :{key} OR "
+            f"coalesce(pr.title, '') ILIKE :{key} OR "
+            f"coalesce(pr.body, '') ILIKE :{key}"
+            ") THEN 1 ELSE 0 END"
+        )
+
+    return " OR ".join(predicates), " + ".join(rank_signals), params
+
+
+def _merge_entry_rows(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for group in (primary, secondary):
+        for row in group:
+            row_id = row.get("id")
+            if row_id is None:
+                continue
+            key = str(row_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(dict(row))
+            if len(merged) >= limit:
+                return merged
+
+    return merged
+
+
+def _fetch_full_text_entries(db: Session, payload: ChatQuery, limit: int) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     try:
         entries = db.execute(
             text(
@@ -60,12 +343,14 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                     pr.github_pr_number,
                     pr.title AS pr_title,
                     pr.url AS pr_url,
-                    ts_rank(
+                    MAX(ts_rank(
                         k.search_document,
                         websearch_to_tsquery('english', :query)
-                    ) AS rank
+                    )) AS rank,
+                    MAX(COALESCE(pr.updated_at, k.updated_at)) AS sort_ts
                 FROM knowledge_entries k
                 LEFT JOIN pull_requests pr ON pr.id = k.pr_id
+                LEFT JOIN file_mappings fm ON fm.knowledge_entry_id = k.id
                 WHERE k.repo_id = :repo_id
                   AND (
                     k.search_document @@ websearch_to_tsquery('english', :query)
@@ -73,24 +358,48 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                         'english',
                         coalesce(pr.title, '') || ' ' || coalesce(pr.body, '')
                     ) @@ websearch_to_tsquery('english', :query)
+                    OR coalesce(fm.file_path, '') ILIKE :query_file_hint
                   )
-                ORDER BY rank DESC, COALESCE(pr.updated_at, k.updated_at) DESC
+                GROUP BY
+                    k.id,
+                    k.summary,
+                    k.intent,
+                    k.tags,
+                    pr.github_pr_number,
+                    pr.title,
+                    pr.url
+                ORDER BY rank DESC, sort_ts DESC
                 LIMIT :limit
                 """
             ),
-            {"repo_id": payload.repo_id, "query": payload.query.strip(), "limit": payload.limit},
+            {
+                "repo_id": payload.repo_id,
+                "query": payload.query.strip(),
+                "query_file_hint": f"%{payload.query.strip()}%",
+                "limit": limit,
+            },
         ).mappings().all()
     except Exception:
+        db.rollback()
         logger.exception("Full-text retrieval failed; falling back to lexical retrieval")
 
-    if entries:
-        return entries
+    return [dict(row) for row in entries]
 
+
+def _fetch_lexical_entries(
+    db: Session,
+    payload: ChatQuery,
+    query_terms: list[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    term_predicates, rank_formula, term_params = _build_lexical_term_fragments(query_terms)
     ilike_query = f"%{payload.query.strip()}%"
+    entries: list[dict[str, Any]] = []
+
     try:
         entries = db.execute(
             text(
-                """
+                f"""
                 SELECT
                     k.id,
                     k.summary,
@@ -99,7 +408,7 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                     pr.github_pr_number,
                     pr.title AS pr_title,
                     pr.url AS pr_url,
-                    0 AS rank,
+                    MAX({rank_formula}) AS rank,
                     MAX(COALESCE(pr.updated_at, k.updated_at)) AS sort_ts
                 FROM knowledge_entries k
                 LEFT JOIN pull_requests pr ON pr.id = k.pr_id
@@ -111,6 +420,7 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                     OR coalesce(pr.title, '') ILIKE :ilike_query
                     OR coalesce(pr.body, '') ILIKE :ilike_query
                     OR coalesce(fm.file_path, '') ILIKE :ilike_query
+                    OR ({term_predicates})
                   )
                 GROUP BY
                     k.id,
@@ -120,20 +430,22 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                     pr.github_pr_number,
                     pr.title,
                     pr.url
-                ORDER BY sort_ts DESC
+                ORDER BY rank DESC, sort_ts DESC
                 LIMIT :limit
                 """
             ),
-            {"repo_id": payload.repo_id, "ilike_query": ilike_query, "limit": payload.limit},
+            {"repo_id": payload.repo_id, "ilike_query": ilike_query, "limit": limit, **term_params},
         ).mappings().all()
     except Exception:
+        db.rollback()
         logger.exception("Lexical retrieval failed; falling back to recency retrieval")
 
-    if entries:
-        return entries
+    return [dict(row) for row in entries]
 
+
+def _fetch_recency_entries(db: Session, payload: ChatQuery, limit: int) -> list[dict[str, Any]]:
     try:
-        return db.execute(
+        rows = db.execute(
             text(
                 """
                 SELECT
@@ -152,11 +464,31 @@ def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
                 LIMIT :limit
                 """
             ),
-            {"repo_id": payload.repo_id, "limit": max(8, payload.limit)},
+            {"repo_id": payload.repo_id, "limit": limit},
         ).mappings().all()
+        return [dict(row) for row in rows]
     except Exception:
+        db.rollback()
         logger.exception("Recency retrieval failed")
         return []
+
+
+def _fetch_candidate_entries(db: Session, payload: ChatQuery) -> list[dict]:
+    target_limit = max(payload.limit, 8)
+    query_terms = _extract_search_terms(payload.query, limit=10)
+    prefer_lexical_first = _has_file_path_signal(payload.query)
+
+    fulltext_entries = _fetch_full_text_entries(db, payload, limit=target_limit * 2)
+    lexical_entries = _fetch_lexical_entries(db, payload, query_terms, limit=target_limit * 2)
+
+    primary = lexical_entries if prefer_lexical_first else fulltext_entries
+    secondary = fulltext_entries if prefer_lexical_first else lexical_entries
+    merged = _merge_entry_rows(primary, secondary, limit=target_limit)
+    if len(merged) >= target_limit:
+        return merged
+
+    recency_entries = _fetch_recency_entries(db, payload, limit=target_limit)
+    return _merge_entry_rows(merged, recency_entries, limit=target_limit)
 
 
 def _fetch_repo_overview_entries(db: Session, repo_id: str, limit: int = 20) -> list[dict]:
@@ -185,6 +517,183 @@ def _fetch_repo_overview_entries(db: Session, repo_id: str, limit: int = 20) -> 
     except Exception:
         logger.exception("Repo overview retrieval failed")
         return []
+
+
+def _build_sources_from_pr_metadata(
+    db: Session,
+    repo_id: str,
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    query_text = str(query or "").strip()
+    ilike_query = f"%{query_text}%"
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    github_pr_number,
+                    title,
+                    body,
+                    url,
+                    author_login,
+                    state,
+                    created_at,
+                    updated_at,
+                    merged_at,
+                    CASE
+                        WHEN :query_text <> ''
+                             AND (
+                                 COALESCE(title, '') ILIKE :ilike_query
+                                 OR COALESCE(body, '') ILIKE :ilike_query
+                             )
+                        THEN 1
+                        ELSE 0
+                    END AS match_score
+                FROM pull_requests
+                WHERE repo_id = :repo_id
+                ORDER BY match_score DESC, COALESCE(merged_at, updated_at, created_at) DESC
+                LIMIT :limit
+                """
+            ),
+            {
+                "repo_id": repo_id,
+                "query_text": query_text,
+                "ilike_query": ilike_query,
+                "limit": max(limit, 8),
+            },
+        ).mappings().all()
+    except Exception:
+        logger.exception("PR metadata fallback retrieval failed")
+        return []
+
+    fallback_sources: list[dict[str, Any]] = []
+    for row in rows:
+        commit_rows = db.execute(
+            text(
+                """
+                SELECT message
+                FROM commits
+                WHERE pr_id = :pr_id
+                ORDER BY committed_at DESC NULLS LAST
+                LIMIT 3
+                """
+            ),
+            {"pr_id": row.get("id")},
+        ).mappings().all()
+        commit_messages = [
+            str(item.get("message") or "").strip()
+            for item in commit_rows
+            if str(item.get("message") or "").strip()
+        ]
+
+        title = str(row.get("title") or "Untitled pull request").strip()
+        body = str(row.get("body") or "").strip()
+        pr_number = row.get("github_pr_number")
+        summary = body[:700] if body else ""
+        if not summary and commit_messages:
+            summary = "Commit highlights: " + " | ".join(commit_messages[:2])[:680]
+        if not summary:
+            summary = f"PR #{pr_number or '?'} ({title}) is available with limited discussion text."
+
+        intent = body[:420] if body else ""
+        if not intent and commit_messages:
+            intent = f"Intent inferred from commits: {commit_messages[0][:360]}"
+        if not intent:
+            intent = f"PR #{pr_number or '?'} focuses on {title.lower()}."
+
+        fallback_sources.append(
+            {
+                "entry_id": f"pr-metadata-{pr_number or row.get('id')}",
+                "pr_number": pr_number,
+                "pr_title": title,
+                "pr_url": row.get("url"),
+                "summary": summary,
+                "intent": intent,
+                "files": [],
+                "rank": float(row.get("match_score") or 0),
+            }
+        )
+
+    return fallback_sources
+
+
+def _build_live_file_sources(
+    db: Session,
+    repo_id: str,
+    query: str,
+    current_user: UserContext,
+    repo_meta: dict[str, Any],
+    max_files: int = 2,
+) -> list[dict[str, Any]]:
+    query_terms = _extract_search_terms(query, limit=10)
+    if not _has_file_path_signal(query):
+        return []
+    if not query_terms:
+        return []
+
+    candidate_paths = _find_candidate_file_paths(db, repo_id, query_terms, limit=max_files * 2)
+    if not candidate_paths:
+        return []
+
+    try:
+        user_id = require_user_id(db, current_user.sub)
+        gh_account = require_github_account(db, user_id)
+        token = decrypt_token(gh_account["access_token_encrypted"])
+        github = GitHubService(token)
+    except Exception:
+        logger.warning("Unable to initialize GitHub client for live file context", exc_info=True)
+        return []
+
+    repo_full_name = str(repo_meta.get("full_name") or "").strip()
+    default_branch = str(repo_meta.get("default_branch") or "main").strip() or "main"
+    if not repo_full_name:
+        return []
+
+    live_sources: list[dict[str, Any]] = []
+    for file_path in candidate_paths:
+        try:
+            content = github.get_file_content(repo_full_name, file_path, ref=default_branch, max_chars=14000)
+        except Exception:
+            logger.warning("Unable to fetch live file content for %s", file_path, exc_info=True)
+            continue
+
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            continue
+
+        # Keep the excerpt bounded; AI service will compact again before prompt assembly.
+        excerpt = normalized_content[:4200]
+        excerpt_lines = excerpt.count("\n") + 1
+        live_sources.append(
+            {
+                "entry_id": f"live-file::{file_path}",
+                "pr_number": None,
+                "pr_title": f"Live file snapshot: {file_path}",
+                "pr_url": None,
+                "summary": f"Current code excerpt from {file_path}:\n{excerpt}",
+                "intent": (
+                    f"Live code snapshot from {file_path} on branch {default_branch}. "
+                    "Prefer this for code-level answers about this file."
+                ),
+                "file_excerpt": excerpt,
+                "files": [
+                    {
+                        "knowledge_entry_id": None,
+                        "file_path": file_path,
+                        "start_line": 1,
+                        "end_line": excerpt_lines,
+                        "confidence": 1.0,
+                    }
+                ],
+                "rank": 1000.0 - float(len(live_sources)),
+            }
+        )
+        if len(live_sources) >= max_files:
+            break
+
+    return live_sources
 
 
 def _infer_technologies(file_paths: list[str]) -> list[dict[str, Any]]:
@@ -308,6 +817,7 @@ def _build_repo_overview_context(
     repo_id: str,
     current_user: UserContext,
     repo_meta: dict[str, Any],
+    include_live_inventory: bool = True,
 ) -> dict[str, Any]:
     stats = db.execute(
         text(
@@ -433,25 +943,28 @@ def _build_repo_overview_context(
         "technologies": technologies,
     }
 
-    try:
-        user_id = require_user_id(db, current_user.sub)
-        gh_account = require_github_account(db, user_id)
-        token = decrypt_token(gh_account["access_token_encrypted"])
-        github = GitHubService(token)
-        inventory = github.list_repository_tree(
-            str(repo_meta.get("full_name")),
-            branch=str(repo_meta.get("default_branch") or "main"),
-            max_entries=2500,
-        )
-        inventory_paths = [str(item.get("path") or "") for item in inventory if item.get("path")]
-        context["live_inventory"] = {
-            "file_count": len(inventory_paths),
-            "sample_files": inventory_paths[:300],
-            "top_directories": _top_directories(inventory_paths),
-            "technologies": _infer_technologies(inventory_paths),
-        }
-    except Exception:
-        logger.warning("Unable to fetch live GitHub tree for repo overview", exc_info=True)
+    if include_live_inventory:
+        try:
+            user_id = require_user_id(db, current_user.sub)
+            gh_account = require_github_account(db, user_id)
+            token = decrypt_token(gh_account["access_token_encrypted"])
+            github = GitHubService(token)
+            inventory = github.list_repository_tree(
+                str(repo_meta.get("full_name")),
+                branch=str(repo_meta.get("default_branch") or "main"),
+                max_entries=2500,
+            )
+            inventory_paths = [str(item.get("path") or "") for item in inventory if item.get("path")]
+            context["live_inventory"] = {
+                "file_count": len(inventory_paths),
+                "sample_files": inventory_paths[:300],
+                "top_directories": _top_directories(inventory_paths),
+                "technologies": _infer_technologies(inventory_paths),
+            }
+        except Exception:
+            logger.warning("Unable to fetch live GitHub tree for repo overview", exc_info=True)
+            context["live_inventory"] = None
+    else:
         context["live_inventory"] = None
 
     return context
@@ -477,8 +990,20 @@ def chat_query(
     )
 
     repo_overview_context = None
+    metadata_sources: list[dict[str, Any]] = []
     if mode == "repo_overview":
         repo_overview_context = _build_repo_overview_context(db, payload.repo_id, current_user, repo_meta)
+    elif not entries:
+        # If knowledge enrichment rows are absent, still provide repository metadata
+        # so chat can answer from PR-level context instead of returning empty.
+        repo_overview_context = _build_repo_overview_context(
+            db,
+            payload.repo_id,
+            current_user,
+            repo_meta,
+            include_live_inventory=False,
+        )
+        metadata_sources = _build_sources_from_pr_metadata(db, payload.repo_id, query_text, payload.limit)
 
     entry_ids = [row["id"] for row in entries]
     files = []
@@ -539,6 +1064,24 @@ def chat_query(
                 "files": entry_files,
                 "rank": float(entry["rank"] or 0),
             }
+        )
+
+    if not sources and metadata_sources:
+        sources = metadata_sources
+
+    live_file_sources = _build_live_file_sources(
+        db,
+        payload.repo_id,
+        query_text,
+        current_user,
+        repo_meta,
+        max_files=2,
+    )
+    if live_file_sources:
+        sources = _merge_sources(
+            live_file_sources,
+            sources,
+            limit=max(12, max(payload.limit, 8) + len(live_file_sources)),
         )
 
     if not sources and not repo_overview_context:

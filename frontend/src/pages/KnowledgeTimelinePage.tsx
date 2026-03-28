@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAsync } from '../hooks/useAsync'
 import { useApiClient } from '../services/apiClient'
 import { getProjectEvolution } from '../services/knowledgeService'
+import cloudImg from '../assets/cloud.webp'
 
 // ─── Shared style tokens ──────────────────────────────────────────────────────
 const CARD: React.CSSProperties = { borderRadius: 28, border: '1px solid #E7E7E9', background: '#F4F4F5', padding: '24px 28px' }
@@ -68,7 +69,7 @@ export function KnowledgeTimelinePage() {
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         >
           <img
-            src="/src/assets/cloud.webp"
+            src={cloudImg}
             alt=""
             style={{ position: 'absolute', width: '110%', left: '-5%', bottom: '-20%', opacity: 0.5, mixBlendMode: 'screen', pointerEvents: 'none', zIndex: 1 }}
           />
